@@ -37,9 +37,15 @@ def media_type(path: Path) -> str | None:
 
 def available_path(path: Path, reserved: set[Path]) -> Path:
     """Izveido unikālu mērķa nosaukumu, nepārrakstot esošus failus."""
+    # Directory entries include dangling symlinks. Use the same conservative
+    # case-insensitive policy on every platform, including for planned names.
+    occupied = {str(item).casefold() for item in reserved}
+    if path.parent.is_dir():
+        occupied.update(str(item).casefold() for item in path.parent.iterdir())
     candidate = path
     counter = 1
-    while candidate.exists() or candidate in reserved:
+    while (candidate.exists() or candidate.is_symlink()
+           or str(candidate).casefold() in occupied):
         candidate = path.with_name(f"{path.stem}_{counter}{path.suffix}")
         counter += 1
     return candidate
@@ -49,14 +55,19 @@ def build_plan(source: Path, output: Path) -> list[Move]:
     """Izveido determinētu visu atrasto multivides failu pārvietošanas plānu."""
     source = source.resolve()
     output = output.resolve()
+    if source == output:
+        raise ValueError("Avota un rezultāta mape nedrīkst būt viena un tā pati.")
+    output_is_nested = source in output.parents
     reserved: set[Path] = set()
     plan: list[Move] = []
 
     for path in sorted(source.rglob("*")):
+        if path.is_symlink():
+            continue
         resolved = path.resolve()
         if not path.is_file() or resolved == Path(__file__).resolve():
             continue
-        if output == resolved or output in resolved.parents:
+        if output_is_nested and (output == resolved or output in resolved.parents):
             continue
         category = media_type(path)
         if category is None:
@@ -70,7 +81,11 @@ def build_plan(source: Path, output: Path) -> list[Move]:
 
 def execute(plan: list[Move]) -> None:
     for move in plan:
+        if move.source.is_symlink():
+            raise ValueError(f"Avots ir simboliskā saite: {move.source}")
         move.destination.parent.mkdir(parents=True, exist_ok=True)
+        if available_path(move.destination, set()) != move.destination:
+            raise FileExistsError(f"Mērķis jau ir aizņemts: {move.destination}")
         shutil.move(str(move.source), str(move.destination))
 
 
@@ -94,7 +109,10 @@ def main() -> int:
     if not source.is_dir():
         raise SystemExit(f"Mērķis nav mape: {source}")
     output = (args.output or source / "sakartots").expanduser()
-    plan = build_plan(source, output)
+    try:
+        plan = build_plan(source, output)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     for move in plan:
         print(f"{move.source} -> {move.destination}")
     if args.apply:
