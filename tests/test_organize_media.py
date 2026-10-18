@@ -155,6 +155,7 @@ class OrganizeMediaTests(unittest.TestCase):
             }
             for link, target in links.items():
                 self.make_link(link, target)
+            original_links = {link: os.readlink(link) for link in links}
             linked_directory = source / "linked-directory"
             self.make_link(linked_directory, root, target_is_directory=True)
             plan = build_plan(source, source / "output")
@@ -162,7 +163,7 @@ class OrganizeMediaTests(unittest.TestCase):
             execute(plan)
             self.assertEqual(plan[0].destination.read_text(), "original")
             self.assertEqual(external.read_text(), "external")
-            for link, target in links.items():
+            for link, target in original_links.items():
                 self.assertTrue(link.is_symlink())
                 self.assertEqual(os.readlink(link), target)
 
